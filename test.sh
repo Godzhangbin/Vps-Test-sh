@@ -58,7 +58,7 @@ else
 fi
 
 # 探测外部出口 IPv6 是否可用
-PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://api.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
+PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://api6.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
 if [ -n "$PUBLIC_IPV6" ]; then
     echo "外部出口 IPv6: $PUBLIC_IPV6"
     if ip -6 addr show | grep -qi "$PUBLIC_IPV6"; then
@@ -109,13 +109,13 @@ check_download() {
 
 echo -e "\n${YELLOW}[3/3] 正在测试真实网页数据下载...${NC}"
 
-if [ -n "$PUBLIC_IPV4" ]; then
+if [ -n "$LOCAL_IPV4" ] || [ -n "$PUBLIC_IPV4" ]; then
     echo ">> 通过 IPv4 下载测试:"
     check_download "https://www.google.com" 4 "Google" "google"
     check_download "https://www.youtube.com" 4 "YouTube" "ytInitialData"
 fi
 
-if [ -n "$PUBLIC_IPV6" ]; then
+if [ -n "$IPV6_BLOCK" ] || [ -n "$PUBLIC_IPV6" ]; then
     echo ">> 通过 IPv6 下载测试:"
     check_download "https://www.google.com" 6 "Google" "google"
     check_download "https://www.youtube.com" 6 "YouTube" "ytInitialData"
