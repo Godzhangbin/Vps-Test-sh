@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # 颜色定义
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -12,34 +13,37 @@ echo "=========================================="
 # 1. 检测 IPv4 公网属性
 echo -e "\n${YELLOW}[1/3] 正在检测 IPv4 地址属性...${NC}"
 LOCAL_IPV4=$(ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-PUBLIC_IPV4=$(curl -4 -s --max-time 5 https://ipify.org)
+PUBLIC_IPV4=$(curl -4 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
 
 if [ -z "$PUBLIC_IPV4" ]; then
-    echo -e "IPv4 状态: ${RED}无法获取公网 IPv4（可能为纯 IPv6 机器或网络异常）${NC}"
+    echo -e "IPv4 状态: ${RED}无法获取公网 IPv4（纯 IPv6 机器或 IPv4 出站阻断）${NC}"
 else
-    echo "本机网卡 IPv4: ${LOCAL_IPV4:-未检测到独立公网网卡IP}"
+    echo "本机网卡 IPv4: ${LOCAL_IPV4:-未检测到}"
     echo "外部出口 IPv4: $PUBLIC_IPV4"
     
     if ip -4 addr show | grep -q "$PUBLIC_IPV4"; then
         echo -e "IPv4 属性: ${GREEN}独立公网 IP（直接绑定在网卡上）${NC}"
     else
-        echo -e "IPv4 属性: ${RED}NAT 共享 IP / 内网映射（非独立公网 IP）${NC}"
+        echo -e "IPv4 属性: ${YELLOW}NAT 共享 IP / 内网映射（网卡为内网 IP，通过网关出公网）${NC}"
     fi
 fi
 
-# 2. 检测 IPv6 公网属性
+# 2. 检测 IPv6 公网属性（先查网卡绑定，再测外网连通）
 echo -e "\n${YELLOW}[2/3] 正在检测 IPv6 地址属性...${NC}"
 LOCAL_IPV6=$(ip -6 addr show scope global | grep -oP '(?<=inet6\s)[0-9a-fA-F:]+' | head -n 1)
-PUBLIC_IPV6=$(curl -6 -s --max-time 5 https://ipify.org)
+PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
 
-if [ -z "$PUBLIC_IPV6" ]; then
-    echo -e "IPv6 状态: ${RED}无法获取公网 IPv6（未配置或不支持 IPv6）${NC}"
+if [ -z "$LOCAL_IPV6" ] && [ -z "$PUBLIC_IPV6" ]; then
+    echo -e "IPv6 状态: ${RED}网卡未配置全局 IPv6 地址${NC}"
+elif [ -n "$LOCAL_IPV6" ] && [ -z "$PUBLIC_IPV6" ]; then
+    echo "本机网卡 IPv6: $LOCAL_IPV6"
+    echo -e "IPv6 状态: ${RED}网卡已分配公网 IPv6，但无法连接 IPv6 外网（请检查防火墙/安全组或路由表）${NC}"
 else
     echo "本机网卡 IPv6: ${LOCAL_IPV6:-未检测到}"
     echo "外部出口 IPv6: $PUBLIC_IPV6"
     
     if ip -6 addr show | grep -qi "$PUBLIC_IPV6"; then
-        echo -e "IPv6 属性: ${GREEN}独立公网 IP（直接绑定在网卡上）${NC}"
+        echo -e "IPv6 属性: ${GREEN}独立公网 IP（直接绑定在网卡上且外网畅通）${NC}"
     else
         echo -e "IPv6 属性: ${YELLOW}NAT6 或动态隐私扩展地址（网卡 IP 与出口 IP 不一致）${NC}"
     fi
@@ -51,15 +55,12 @@ check_download() {
     local ip_ver=$2
     local label=$3
     local keyword=$4
+    local tmp_file=$(mktemp)
 
-    # 跟踪重定向(-L)，限制下载最大等待10秒，伪装常见浏览器 UA，将网页内容存入变量
-    response=$(curl -$ip_ver -s -L --max-time 10 \
+    metrics=$(curl -$ip_ver -s -L --max-time 10 \
         -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-        -w "\n%{http_code}|%{size_download}|%{speed_download}" "$url")
-
-    # 提取最后一行状态指标和前面下载的 HTML 正文
-    metrics=$(echo "$response" | tail -n 1)
-    body=$(echo "$response" | sed '$d')
+        -o "$tmp_file" \
+        -w "%{http_code}|%{size_download}|%{speed_download}" "$url")
 
     http_code=$(echo "$metrics" | cut -d'|' -f1)
     size_bytes=$(echo "$metrics" | cut -d'|' -f2)
@@ -67,10 +68,9 @@ check_download() {
     speed_kbps=$((speed_bps / 1024))
 
     if [[ "$http_code" == "200" && "$size_bytes" -gt 10240 ]]; then
-        # 检查是否命中人机验证页面或包含正常业务关键词
-        if echo "$body" | grep -qi "unusual traffic\|sorry/index"; then
+        if grep -qi "<title>.*unusual traffic.*</title>" "$tmp_file"; then
             echo -e "  - $label: ${YELLOW}已下载数据 (${size_bytes} 字节)，但触发 Google 人机验证风控${NC}"
-        elif echo "$body" | grep -qi "$keyword"; then
+        elif grep -qi "$keyword" "$tmp_file"; then
             echo -e "  - $label: ${GREEN}下载成功 | 状态: 200 | 大小: ${size_bytes} 字节 | 速度: ${speed_kbps} KB/s${NC}"
         else
             echo -e "  - $label: ${YELLOW}状态 200 且下载了 ${size_bytes} 字节，但未匹配到预期页面特征${NC}"
@@ -82,6 +82,8 @@ check_download() {
     else
         echo -e "  - $label: ${RED}下载异常 (HTTP $http_code | 仅下载: ${size_bytes} 字节)${NC}"
     fi
+
+    rm -f "$tmp_file"
 }
 
 echo -e "\n${YELLOW}[3/3] 正在测试真实网页数据下载...${NC}"
