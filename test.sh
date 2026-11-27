@@ -13,7 +13,7 @@ echo "=========================================="
 # 1. 检测 IPv4 公网属性
 echo -e "\n${YELLOW}[1/3] 正在检测 IPv4 地址属性...${NC}"
 LOCAL_IPV4=$(ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-PUBLIC_IPV4=$(curl -4 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+PUBLIC_IPV4=$(curl -4 -sL --max-time 5 https://api.ipify.org | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
 
 if [ -z "$PUBLIC_IPV4" ]; then
     echo -e "IPv4 状态: ${RED}无法获取公网 IPv4（可能为纯 IPv6 机器或 IPv4 出站阻断）${NC}"
@@ -58,7 +58,7 @@ else
 fi
 
 # 探测外部出口 IPv6 是否可用
-PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
+PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://api.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
 if [ -n "$PUBLIC_IPV6" ]; then
     echo "外部出口 IPv6: $PUBLIC_IPV6"
     if ip -6 addr show | grep -qi "$PUBLIC_IPV6"; then
