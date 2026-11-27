@@ -16,7 +16,7 @@ LOCAL_IPV4=$(ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' 
 PUBLIC_IPV4=$(curl -4 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
 
 if [ -z "$PUBLIC_IPV4" ]; then
-    echo -e "IPv4 状态: ${RED}无法获取公网 IPv4（纯 IPv6 机器或 IPv4 出站阻断）${NC}"
+    echo -e "IPv4 状态: ${RED}无法获取公网 IPv4（可能为纯 IPv6 机器或 IPv4 出站阻断）${NC}"
 else
     echo "本机网卡 IPv4: ${LOCAL_IPV4:-未检测到}"
     echo "外部出口 IPv4: $PUBLIC_IPV4"
@@ -28,25 +28,46 @@ else
     fi
 fi
 
-# 2. 检测 IPv6 公网属性（先查网卡绑定，再测外网连通）
+# 2. 通过 ip -6 addr 检测网卡 IPv6 公网地址及静态/动态属性
 echo -e "\n${YELLOW}[2/3] 正在检测 IPv6 地址属性...${NC}"
-LOCAL_IPV6=$(ip -6 addr show scope global | grep -oP '(?<=inet6\s)[0-9a-fA-F:]+' | head -n 1)
-PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
+IPV6_BLOCK=$(ip -6 addr show scope global)
 
-if [ -z "$LOCAL_IPV6" ] && [ -z "$PUBLIC_IPV6" ]; then
-    echo -e "IPv6 状态: ${RED}网卡未配置全局 IPv6 地址${NC}"
-elif [ -n "$LOCAL_IPV6" ] && [ -z "$PUBLIC_IPV6" ]; then
-    echo "本机网卡 IPv6: $LOCAL_IPV6"
-    echo -e "IPv6 状态: ${RED}网卡已分配公网 IPv6，但无法连接 IPv6 外网（请检查防火墙/安全组或路由表）${NC}"
+if [ -z "$IPV6_BLOCK" ]; then
+    echo -e "网卡 IPv6 状态: ${RED}未检测到任何全局公网 IPv6 地址${NC}"
 else
-    echo "本机网卡 IPv6: ${LOCAL_IPV6:-未检测到}"
+    echo -e "网卡 IPv6 状态: ${GREEN}已配置全局公网 IPv6${NC}"
+    # 逐条解析网卡上的全局 IPv6 地址及其生命周期属性
+    while IFS= read -r line; do
+        if [[ "$line" =~ inet6[[:space:]]+([0-9a-fA-F:]+/[0-9]+) ]]; then
+            addr="${BASH_REMATCH[1]}"
+            flags="$line"
+            read -r lft_line
+            
+            # 排除临时隐私扩展地址 (temporary) 和未完成 DAD 检测的地址
+            if [[ "$flags" == *"temporary"* ]]; then
+                type_desc="${YELLOW}动态临时隐私地址 (Privacy Extensions)${NC}"
+            elif [[ "$lft_line" == *"valid_lft forever"* && "$flags" != *"dynamic"* ]]; then
+                type_desc="${GREEN}静态公网 IPv6（永久有效 valid_lft forever）${NC}"
+            else
+                lft_val=$(echo "$lft_line" | grep -oP 'valid_lft\s+\S+')
+                type_desc="${YELLOW}动态分配 IPv6（租约有效期: ${lft_val:-有限期}）${NC}"
+            fi
+            echo -e "  - 网卡绑定地址: ${addr} -> ${type_desc}"
+        fi
+    done <<< "$IPV6_BLOCK"
+fi
+
+# 探测外部出口 IPv6 是否可用
+PUBLIC_IPV6=$(curl -6 -sL --max-time 5 https://www.ipify.org | grep -oE '^[0-9a-fA-F:]+$')
+if [ -n "$PUBLIC_IPV6" ]; then
     echo "外部出口 IPv6: $PUBLIC_IPV6"
-    
     if ip -6 addr show | grep -qi "$PUBLIC_IPV6"; then
-        echo -e "IPv6 属性: ${GREEN}独立公网 IP（直接绑定在网卡上且外网畅通）${NC}"
+        echo -e "IPv6 出口状态: ${GREEN}外网畅通，且出口 IP 与网卡绑定一致${NC}"
     else
-        echo -e "IPv6 属性: ${YELLOW}NAT6 或动态隐私扩展地址（网卡 IP 与出口 IP 不一致）${NC}"
+        echo -e "IPv6 出口状态: ${YELLOW}外网畅通，但经过了 NAT6 或动态地址转换${NC}"
     fi
+elif [ -n "$IPV6_BLOCK" ]; then
+    echo -e "IPv6 出口状态: ${RED}无法连接 IPv6 外网（网卡虽有公网 IPv6，但出站路由或防火墙未通）${NC}"
 fi
 
 # 3. 真实下载网页数据并校验内容函数
